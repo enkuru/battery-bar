@@ -2,6 +2,12 @@
 
 An iPhone-style battery for the macOS menu bar, with live power use and time left.
 
+<p>
+  <img src="docs/screenshots/on-battery.png" width="260" alt="The menu on battery: time left, power use over the last minute, where the power goes, the apps using the most power and battery health">
+  <img src="docs/screenshots/charging.png" width="260" alt="The menu while charging: time to full, the charger's power split between the Mac and the battery, and the charger's name">
+  <img src="docs/screenshots/low-power-light.png" width="260" alt="The menu in Low Power Mode with a light menu bar: a yellow icon and chart">
+</p>
+
 The icon fills with the charge, with the percentage cut out of the battery. It turns green on the charger, red at 20%
 or less on battery, and yellow in Low Power Mode. The time left sits under it; **Show Time Left in Menu Bar** hides it.
 

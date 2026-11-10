@@ -7,10 +7,14 @@ or less on battery, and yellow in Low Power Mode. The time left sits under it; *
 
 Click it for:
 
-- The charge and the time left in words, with the clock time the battery runs out or finishes charging.
-- **Using now**: the whole Mac's power draw in watts, with a chart of the last minute.
+- The charge and the time left in words, with the clock time the battery runs out or finishes charging. On battery,
+  how long since you unplugged and how much charge that used.
+- **Using now**: the whole Mac's power draw in watts, with a chart of the last minute. On the charger, its name and the
+  most power it delivers to this Mac.
 - Where the power goes: charger to Mac, battery to Mac, or charger to battery.
 - **Apps using the most power**: the three apps drawing the most processor power, their helper processes included.
+  Point at one to quit it.
+- **Battery health**: maximum capacity, charge cycles and condition, as System Settings shows them.
 - **Battery Settings…**, and a shortcut to them when Low Power Mode is on.
 
 ## Install
@@ -39,10 +43,15 @@ Remove it from Login Items, choose **Quit BatteryBar** from the menu and delete 
 - Live power comes from the System Management Controller: `PSTR` for the whole Mac, `PPBR` for the battery and `PDTR`
   for the charger. The app reads them every 2 seconds, and every second while the menu is open, so the chart already
   holds the last minute when you open it. Apple doesn't document these keys; if a macOS update removes them, the menu
-  hides the live figures.
-- On battery, the time left is BatteryBar's own estimate: the energy left in the battery divided by the power used,
-  averaged over about two minutes. It's ready about 10 seconds after you unplug, where macOS takes several minutes.
-  Until then, and while charging, the app shows macOS's estimate.
+  hides the live figures. While charging, `PPBR` stays near 1 W, so the power going into the battery comes from the
+  battery's own gauge (voltage × current), which updates once a minute.
+- The time left is BatteryBar's own estimate, ready the moment the power source changes, where macOS takes minutes.
+  On battery it divides the energy left by the power used, averaged over about two minutes and started from what the
+  Mac drew in the half minute before you unplugged. While charging it adds up the energy still to go at the charging
+  power learned for each percentage, aiming at where charging has been stopping, such as 80% with Optimized Battery
+  Charging. What it learns is kept across launches. Until it has a figure, the app shows macOS's estimate.
+- The battery's energy, health and cycle figures come from its controller's IORegistry entry, whose keys Apple doesn't
+  document either; without them the menu hides Battery health and falls back to macOS's estimate.
 - App power comes from the kernel's per-process energy counters. Only your own processes can be read without admin
   rights, so system daemons are left out, and only processor power counts, not the screen or graphics. Helper processes
   are grouped under the app macOS holds responsible for them, through a private system function the app looks up at

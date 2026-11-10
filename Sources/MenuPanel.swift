@@ -5,13 +5,15 @@ struct MenuPanel: View {
     static let width: CGFloat = 300
 
     let model: BatteryModel
+    let quit: @MainActor (NSRunningApplication) -> Void
 
     var body: some View {
         if let state = model.state {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     Header(state: state)
-                    Summary(state: state, timeRemaining: model.timeRemaining)
+                    Summary(state: state, timeRemaining: model.timeRemaining, chargeTarget: model.chargeTarget,
+                            unplug: model.unplug)
                         .padding(.top, 16)
                 }
                 .padding(EdgeInsets(top: 14, leading: 16, bottom: 12, trailing: 16))
@@ -19,11 +21,20 @@ struct MenuPanel: View {
                 if let reading = model.reading {
                     Divider()
                         .padding(.horizontal, 16)
-                    PowerSection(state: state, reading: reading, history: model.history)
+                    PowerSection(state: state, reading: reading, history: model.history, isLive: model.isLive)
                         .padding(EdgeInsets(top: 12, leading: 16, bottom: 14, trailing: 16))
                     Divider()
                         .padding(.horizontal, 16)
-                    TopApps(apps: model.topApps)
+                    TopApps(apps: model.topApps, quit: quit)
+                        // A closing menu may never report the pointer leaving, so each opening starts fresh.
+                        .id(model.isLive)
+                        .padding(EdgeInsets(top: 12, leading: 16, bottom: 14, trailing: 16))
+                }
+
+                if let health = model.health {
+                    Divider()
+                        .padding(.horizontal, 16)
+                    HealthSection(health: health, needsService: state.needsService)
                         .padding(EdgeInsets(top: 12, leading: 16, bottom: 14, trailing: 16))
                 }
             }
@@ -63,6 +74,8 @@ private struct Header: View {
 private struct Summary: View {
     let state: BatteryState
     let timeRemaining: BatteryState.TimeRemaining?
+    let chargeTarget: Int
+    let unplug: BatteryModel.Unplug?
 
     private static let numberFont = Font.system(size: 32, weight: .semibold)
     private static let wordFont = Font.system(size: 17, weight: .medium)
@@ -72,11 +85,29 @@ private struct Summary: View {
             headline
                 .foregroundStyle(BatteryTone(state) == .low ? Color(nsColor: BatteryTone.low.ink) : .primary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(detail)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .modifier(RollingNumber(value: estimate))
+            ForEach([detail, sinceUnplug].compactMap { $0 }, id: \.self) { line in
+                Text(line)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    /// "On battery for 1h 20m, 35% used"; nil on the charger and in the first minute.
+    private var sinceUnplug: String? {
+        guard state.charge == .discharging, let unplug else { return nil }
+
+        let elapsed = Date.now.timeIntervalSince(unplug.date)
+        guard elapsed >= 60 else { return nil }
+        let time = TimeLeftFormat.compact(.seconds(elapsed))
+        let used = unplug.percentage - state.percentage
+        return used > 0 ? "On battery for \(time), \(used)% used" : "On battery for \(time)"
+    }
+
+    private var chargeSuffix: String {
+        chargeTarget == 100 ? "to full" : "to \(chargeTarget)%"
     }
 
     private var estimate: Duration? {
@@ -87,7 +118,7 @@ private struct Summary: View {
     private var headline: Text {
         switch (state.charge, estimate) {
         case (.discharging, let duration?): spelled(duration, then: "left")
-        case (.charging, let duration?): spelled(duration, then: "to full")
+        case (.charging, let duration?): spelled(duration, then: chargeSuffix)
         case (.discharging, nil): title("Estimating time left")
         case (.charging, nil): title("Charging")
         case (.notCharging, _): title("Not charging")
@@ -98,7 +129,10 @@ private struct Summary: View {
     private var detail: String {
         switch (state.charge, estimate) {
         case (.discharging, let duration?): "Runs out around \(TimeLeftFormat.clockTime(after: duration))"
-        case (.charging, let duration?): "Full around \(TimeLeftFormat.clockTime(after: duration))"
+        case (.charging, let duration?) where chargeTarget == 100:
+            "Full around \(TimeLeftFormat.clockTime(after: duration))"
+        case (.charging, let duration?):
+            "Reaches \(chargeTarget)% around \(TimeLeftFormat.clockTime(after: duration))"
         case (.discharging, nil): "Ready in a few seconds."
         case (.charging, nil): "Working out the time to full."
         case (.notCharging, _): "Your Mac runs on the charger. The battery stays at \(state.percentage)%."
@@ -125,6 +159,7 @@ private struct PowerSection: View {
     let state: BatteryState
     let reading: PowerReading
     let history: [BatteryModel.Sample]
+    let isLive: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -135,8 +170,9 @@ private struct PowerSection: View {
                 Text(Watts.text(reading.system))
                     .font(.system(size: 15, weight: .semibold))
                     .monospacedDigit()
+                    .modifier(RollingNumber(value: reading.system))
             }
-            PowerChart(samples: history, tone: BatteryTone(state))
+            PowerChart(samples: history, tone: BatteryTone(state), isLive: isLive)
                 .frame(height: 40)
                 .padding(.top, 8)
                 .accessibilityLabel("Power use over the last minute")
@@ -150,25 +186,72 @@ private struct PowerSection: View {
             .padding(.top, 4)
             PowerFlow(state: state, reading: reading)
                 .padding(.top, 14)
+            if let adapter = state.adapter {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(adapter.name ?? "Power adapter")
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    Text("up to \(adapter.watts) W")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(size: 13))
+                .padding(.top, 12)
+            }
         }
     }
 }
 
-/// The last minute of power draw, newest at the right.
+/// The last minute of power draw, newest at the right. While the menu is open the line scrolls with the clock
+/// and the scale eases to each new peak, instead of both jumping once a second.
 private struct PowerChart: View {
     let samples: [BatteryModel.Sample]
     let tone: BatteryTone
+    let isLive: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let minimumScale = 10.0
+    /// The line moves about 5 points a second, so 30 frames a second already looks smooth.
+    private static let frameInterval = 1.0 / 30
+
+    var body: some View {
+        let animates = isLive && !reduceMotion
+        TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !animates)) { timeline in
+            // A paused timeline keeps the date it paused at, so without animation the chart reads the clock.
+            PowerPlot(samples: samples, tone: tone, top: scale,
+                      end: (animates ? timeline.date : .now).addingTimeInterval(-BatteryModel.chartLag))
+        }
+        .animation(animates ? .easeInOut(duration: 0.6) : nil, value: scale)
+    }
+
+    private var scale: Double {
+        max(Self.minimumScale, (samples.map(\.watts).max() ?? 0) * 1.25)
+    }
+}
+
+/// One frame of the chart; SwiftUI animates its scale.
+private struct PowerPlot: View, Animatable {
+    let samples: [BatteryModel.Sample]
+    let tone: BatteryTone
+    var top: Double
+    /// The time at the right edge.
+    let end: Date
 
     /// A longer gap means sampling paused (menu closed on the charger), so the line breaks there.
     private static let maxGap: TimeInterval = 7
-    private static let minimumScale = 10.0
+
+    nonisolated var animatableData: Double {
+        get { top }
+        set { top = newValue }
+    }
 
     var body: some View {
         let color = Color(nsColor: tone.ink)
         Canvas { context, size in
-            guard let end = samples.last?.date else { return }
-
-            let top = max(Self.minimumScale, (samples.map(\.watts).max() ?? 0) * 1.25)
+            // The newest sample lies past the right edge until the clock catches up with it.
+            context.clip(to: Path(CGRect(origin: .zero, size: size)))
             func point(_ sample: BatteryModel.Sample) -> CGPoint {
                 CGPoint(x: size.width * (1 - end.timeIntervalSince(sample.date) / BatteryModel.historySpan),
                         y: size.height - 2 - (size.height - 4) * min(sample.watts / top, 1))
@@ -248,6 +331,7 @@ private struct PowerFlow: View {
                 Text(value)
                     .font(.system(size: 12.5, weight: .semibold))
                     .monospacedDigit()
+                    .modifier(RollingNumber(value: value))
                 Text(label)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -274,8 +358,12 @@ private struct PowerFlow: View {
 /// The apps drawing the most processor power, to show what to quit for a longer battery life.
 private struct TopApps: View {
     let apps: [AppPower]?
+    let quit: @MainActor (NSRunningApplication) -> Void
 
-    private static let rowHeight: CGFloat = 20
+    /// The list as it was when the pointer arrived, so rows don't swap places under a Quit button.
+    @State private var heldApps: [AppPower]?
+
+    static let rowHeight: CGFloat = 22
     private static let rowSpacing: CGFloat = 4
     /// Room for every row, so the menu keeps its height as apps come and go.
     private static let listHeight = CGFloat(BatteryModel.topAppCount) * rowHeight
@@ -286,9 +374,9 @@ private struct TopApps: View {
             Text("Apps using the most power")
                 .font(.system(size: 13, weight: .semibold))
             VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                if let apps, !apps.isEmpty {
-                    ForEach(apps) { app in
-                        row(app)
+                if let shown = heldApps ?? apps, !shown.isEmpty {
+                    ForEach(shown) { app in
+                        AppRow(app: app, quit: quit)
                     }
                 } else {
                     Text(apps == nil ? "Measuring…" : "No app is using much power.")
@@ -298,30 +386,136 @@ private struct TopApps: View {
                 }
             }
             .frame(height: Self.listHeight, alignment: .top)
+            .onHover { isInside in heldApps = isInside ? apps : nil }
             Text("Processor power only, not the screen or graphics.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+}
 
-    private func row(_ app: AppPower) -> some View {
+/// One app, with a Quit button while the pointer is on it.
+private struct AppRow: View {
+    let app: AppPower
+    let quit: @MainActor (NSRunningApplication) -> Void
+
+    @State private var isHovered = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
         HStack(spacing: 8) {
             Image(nsImage: app.icon)
                 .resizable()
                 .frame(width: 16, height: 16)
                 .accessibilityHidden(true)
             Text(app.name)
-                .font(.system(size: 13))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
             Text(Watts.text(app.watts))
-                .font(.system(size: 13))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            if isHovered, let runningApp = app.runningApp {
+                Button("Quit") { quit(runningApp) }
+                    .buttonStyle(QuitButtonStyle())
+                    .accessibilityLabel("Quit \(app.name)")
+            }
+        }
+        .font(.system(size: 13))
+        .frame(height: TopApps.rowHeight)
+        .padding(.horizontal, 6)
+        .background(isHovered && app.runningApp != nil ? highlight : .clear, in: .rect(cornerRadius: 6))
+        .padding(.horizontal, -6)
+        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if let runningApp = app.runningApp {
+                Button("Quit \(app.name)") { quit(runningApp) }
+            }
+        }
+    }
+
+    private var highlight: Color {
+        colorScheme == .dark ? .white.opacity(0.09) : .black.opacity(0.06)
+    }
+
+    private struct QuitButtonStyle: ButtonStyle {
+        @Environment(\.colorScheme) private var colorScheme
+
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .font(.system(size: 11.5, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(fill(isPressed: configuration.isPressed), in: .rect(cornerRadius: 5))
+        }
+
+        private func fill(isPressed: Bool) -> Color {
+            colorScheme == .dark
+                ? .white.opacity(isPressed ? 0.28 : 0.18)
+                : .black.opacity(isPressed ? 0.16 : 0.09)
+        }
+    }
+}
+
+/// How worn the battery is, in System Settings' terms.
+private struct HealthSection: View {
+    let health: BatteryHealth
+    let needsService: Bool
+
+    private static let warning = Color(nsColor: .adaptive(light: 0xC93400, dark: 0xFF9F0A))
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Battery health")
+                .font(.system(size: 13, weight: .semibold))
+            VStack(spacing: 2) {
+                row("Maximum capacity", value: Text(verbatim: "\(health.maximumCapacity)%"))
+                row("Charge cycles", value: Text(verbatim: cycles))
+                row("Condition", value: needsService
+                    ? Text("Service recommended").fontWeight(.semibold).foregroundStyle(Self.warning)
+                    : Text("Normal"))
+            }
+            .padding(.top, 8)
+            if needsService {
+                Text("The battery holds less charge than when it was new.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
+        }
+    }
+
+    private var cycles: String {
+        guard let design = health.designCycleCount else { return health.cycleCount.formatted() }
+        return "\(health.cycleCount.formatted()) of \(design.formatted())"
+    }
+
+    private func row(_ label: String, value: Text) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+            Spacer()
+            value
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
-        .frame(height: Self.rowHeight)
+        .font(.system(size: 13))
+        .frame(height: 20)
+    }
+}
+
+/// Digits that roll to a new value instead of jumping; a plain swap with Reduce Motion on.
+private struct RollingNumber<Value: Equatable>: ViewModifier {
+    let value: Value
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .contentTransition(.numericText())
+            .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: value)
     }
 }
 

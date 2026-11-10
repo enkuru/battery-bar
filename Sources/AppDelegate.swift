@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let model = BatteryModel()
     private var monitor: BatteryMonitor?
-    private lazy var panel = NSHostingView(rootView: MenuPanel(model: model))
+    private lazy var panel = NSHostingView(rootView: MenuPanel(model: model) { [weak self] app in self?.quit(app) })
     private var shownIcon: (state: BatteryState, caption: String?)?
     private var isMenuOpen = false
 
@@ -146,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleTimeInMenuBar() {
         showsTimeInMenuBar.toggle()
         showStatusIcon()
+    }
+
+    private func quit(_ app: NSRunningApplication) {
+        // The menu closes first, so a "save changes?" alert from the app doesn't wait behind it.
+        statusItem.menu?.cancelTracking()
+        app.terminate()
     }
 
     @objc private func openBatterySettings() {

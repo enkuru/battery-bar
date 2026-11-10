@@ -43,7 +43,7 @@ enum BatteryTone {
     }
 }
 
-private extension NSColor {
+extension NSColor {
     static func adaptive(light: UInt32, dark: UInt32) -> NSColor {
         NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua

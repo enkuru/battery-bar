@@ -9,6 +9,8 @@ struct AppPower: Identifiable {
     let name: String
     let icon: NSImage
     let watts: Double
+    /// The app Quit asks to quit; nil for command-line tools and for BatteryBar itself.
+    let runningApp: NSRunningApplication?
 }
 
 /// Processor power per app, from the kernel's per-process energy counters. Only the user's own processes
@@ -24,6 +26,7 @@ final class AppPowerMeter {
     private struct Identity {
         let name: String
         let icon: NSImage
+        let runningApp: NSRunningApplication?
     }
 
     private static let smoothing: TimeInterval = 5
@@ -75,7 +78,9 @@ final class AppPowerMeter {
             .sorted { $0.value > $1.value }
             .prefix(count)
             .compactMap { app, watts in
-                identities[app].map { AppPower(id: app, name: $0.name, icon: $0.icon, watts: watts) }
+                identities[app].map {
+                    AppPower(id: app, name: $0.name, icon: $0.icon, watts: watts, runningApp: $0.runningApp)
+                }
             }
     }
 
@@ -90,15 +95,24 @@ final class AppPowerMeter {
             let bundle = String(path[..<bundleEnd.lowerBound]) + ".app"
             if identities[bundle] == nil {
                 identities[bundle] = Identity(name: FileManager.default.displayName(atPath: bundle),
-                                              icon: NSWorkspace.shared.icon(forFile: bundle))
+                                              icon: NSWorkspace.shared.icon(forFile: bundle),
+                                              runningApp: Self.runningApp(at: bundle))
             }
             return bundle
         }
         if identities[path] == nil {
             identities[path] = Identity(name: Self.processName(of: owner) ?? (path as NSString).lastPathComponent,
-                                        icon: NSWorkspace.shared.icon(for: .unixExecutable))
+                                        icon: NSWorkspace.shared.icon(for: .unixExecutable), runningApp: nil)
         }
         return path
+    }
+
+    /// A Dock or menu bar app at that path. Background-only bundles are left out, since they may not answer
+    /// a request to quit.
+    private static func runningApp(at bundle: String) -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first {
+            $0.bundleURL?.path == bundle && $0.activationPolicy != .prohibited && $0 != NSRunningApplication.current
+        }
     }
 
     /// A private libsystem function; looked up at run time, so if a macOS update removes it BatteryBar keeps

@@ -14,11 +14,22 @@ struct BatteryState: Equatable {
         case estimate(Duration)
     }
 
+    struct Adapter: Equatable {
+        /// Nil when the charger does not report a name.
+        let name: String?
+        /// The most the charger agreed to deliver to this Mac, which can be less than its rating.
+        let watts: Int
+    }
+
     let percentage: Int
     let charge: Charge
     let isLowPowerMode: Bool
     /// macOS's estimate until empty while discharging, or until full while charging; nil otherwise.
     let timeRemaining: TimeRemaining?
+    /// Nil on battery, and for chargers that do not report their power.
+    let adapter: Adapter?
+    /// macOS's own verdict that the battery should be serviced.
+    let needsService: Bool
 
     var isOnPowerAdapter: Bool { charge != .discharging }
 
@@ -39,9 +50,25 @@ struct BatteryState: Equatable {
             return BatteryState(percentage: min(percentage, 100),
                                 charge: charge,
                                 isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                                timeRemaining: timeRemaining(from: description, charge: charge))
+                                timeRemaining: timeRemaining(from: description, charge: charge),
+                                adapter: charge == .discharging ? nil : adapter(),
+                                needsService: needsService(from: description))
         }
         return nil
+    }
+
+    private static func adapter() -> Adapter? {
+        guard let details = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any],
+              let watts = details[kIOPSPowerAdapterWattsKey] as? Int
+        else { return nil }
+        // "Name" is not among IOKit's documented keys, so it may be missing.
+        return Adapter(name: details["Name"] as? String, watts: watts)
+    }
+
+    /// Either key marks a battery macOS wants serviced; a healthy battery may publish neither.
+    private static func needsService(from description: [String: Any]) -> Bool {
+        if description[kIOPSBatteryHealthConditionKey] != nil { return true }
+        return (description[kIOPSBatteryHealthKey] as? String).map { $0 != kIOPSGoodValue } ?? false
     }
 
     private static func timeRemaining(from description: [String: Any], charge: Charge) -> TimeRemaining? {

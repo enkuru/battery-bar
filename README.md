@@ -18,10 +18,11 @@ Click it for:
 Needs macOS 14 or later and the Command Line Tools (`xcode-select --install`). Xcode isn't needed.
 
 ```bash
-./build.sh
-ditto build/BatteryBar.app /Applications/BatteryBar.app
-open /Applications/BatteryBar.app
+./install.sh
 ```
+
+It builds the app, quits the running copy, replaces `/Applications/BatteryBar.app` and opens it. To build without
+installing, run `./build.sh`; the app lands in `build/BatteryBar.app`.
 
 On its first launch the app adds itself to Login Items. If you turn it off in System Settings → General → Login Items,
 it stays off. The app is signed ad hoc, so run it from Applications to keep the login item pointing at the same copy.
